@@ -187,7 +187,7 @@
             });
 
             // 変更: 対空砲の配置確率を20%から5%に削減
-            if (color === 0xaaaaaa && Math.random() < 0.05) {
+            if (color === 0xaaaaaa && Math.random() < 0.02) {
                 const aaGeo = new THREE.BoxGeometry(4, 4, 4);
                 const aaMat = new THREE.MeshLambertMaterial({ color: 0xff3333 });
                 const aaMesh = new THREE.Mesh(aaGeo, aaMat);
