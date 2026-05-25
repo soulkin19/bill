@@ -53,7 +53,6 @@
         }
         #throttle button.active { background: #ffaa00; color: #fff; transform: scale(1.05); }
         
-        /* 武器ボタンのサイズを調整して3つ並べられるように変更 */
         #weapons { 
             position: absolute; bottom: 30px; right: 30px; 
             display: flex; gap: 10px; 
@@ -127,12 +126,12 @@
         const objects = []; 
         const projectiles = []; 
         const enemyProjectiles = []; 
-        const enemies = []; // 追加: 対空砲リスト
+        const enemies = []; 
+        const activeFires = []; // 追加: 炎エフェクト管理用
 
         const speeds = { 1: 0.5, 2: 1.5, 3: 3.5 };
         let currentSpeed = speeds[2]; 
 
-        // 追加: ロール（傾き）用に機体の表示部分を分離
         const planeGroup = new THREE.Group();
         const planeVisual = new THREE.Group(); 
         planeGroup.add(planeVisual);
@@ -176,10 +175,19 @@
             scene.add(mesh);
             
             const box3 = new THREE.Box3().setFromObject(mesh);
-            objects.push({ mesh, box3, isSymbol: color === 0x444444 });
+            const isSymbol = color === 0x444444;
+            
+            // 追加: HPを設定（シンボルは20、通常は3）
+            const hp = isSymbol ? 20 : 3;
+            
+            objects.push({ 
+                mesh, box3, isSymbol, 
+                hp: hp, active: true, 
+                fireSpots: [] // 追加: 炎上ポイントを記録する配列
+            });
 
-            // 追加: 20%の確率で建物の上に対空砲を配置
-            if (color === 0xaaaaaa && Math.random() < 0.2) {
+            // 変更: 対空砲の配置確率を20%から5%に削減
+            if (color === 0xaaaaaa && Math.random() < 0.05) {
                 const aaGeo = new THREE.BoxGeometry(4, 4, 4);
                 const aaMat = new THREE.MeshLambertMaterial({ color: 0xff3333 });
                 const aaMesh = new THREE.Mesh(aaGeo, aaMat);
@@ -225,13 +233,11 @@
             document.getElementById(`th-${level}`).classList.add('active');
         }
 
-        // 追加: 連射用の変数
         let isMGFiring = false;
         let isRocketFiring = false;
         let mgCooldown = 0;
         let rocketCooldown = 0;
 
-        // 武器の長押し設定関数
         const setupWeaponBtn = (id, stateVarSetter) => {
             const btn = document.getElementById(id);
             const start = (e) => { e.preventDefault(); stateVarSetter(true); };
@@ -247,7 +253,6 @@
         setupWeaponBtn('btn-mg', (v) => isMGFiring = v);
         setupWeaponBtn('btn-rocket', (v) => isRocketFiring = v);
 
-        // 爆弾は単発のまま
         document.getElementById('btn-bomb').addEventListener('touchstart', (e) => { e.preventDefault(); dropBomb(); });
         document.getElementById('btn-bomb').addEventListener('mousedown', (e) => { e.preventDefault(); dropBomb(); });
 
@@ -261,7 +266,7 @@
             const direction = new THREE.Vector3(0, 0, 1);
             direction.applyQuaternion(planeGroup.quaternion);
             
-            projectiles.push({ mesh: bullet, velocity: direction.multiplyScalar(15), type: 'mg', life: 100 });
+            projectiles.push({ mesh: bullet, velocity: direction.multiplyScalar(15), type: 'mg', life: 100, damage: 1 });
             scene.add(bullet);
         }
 
@@ -272,12 +277,12 @@
             const rocket = new THREE.Mesh(rGeo, rMat);
             rocket.position.copy(planeGroup.position);
             rocket.quaternion.copy(planeGroup.quaternion);
-            rocket.rotateX(Math.PI / 2); // 進行方向に向ける
+            rocket.rotateX(Math.PI / 2);
             
             const direction = new THREE.Vector3(0, 0, 1);
             direction.applyQuaternion(planeGroup.quaternion);
             
-            projectiles.push({ mesh: rocket, velocity: direction.multiplyScalar(12), type: 'rocket', life: 150 });
+            projectiles.push({ mesh: rocket, velocity: direction.multiplyScalar(12), type: 'rocket', life: 150, damage: 2 }); // ロケットはダメージ2
             scene.add(rocket);
         }
 
@@ -294,7 +299,7 @@
             const vel = direction.multiplyScalar(currentSpeed);
             vel.y = -2;
             
-            projectiles.push({ mesh: bomb, velocity: vel, type: 'bomb', life: 200 });
+            projectiles.push({ mesh: bomb, velocity: vel, type: 'bomb', life: 200, damage: 3 }); // 爆弾はダメージ3
             scene.add(bomb);
         }
 
@@ -315,7 +320,6 @@
             btn.addEventListener('mouseleave', end);
         };
 
-        // 変更: 上下ボタンの動きを逆に（上ボタンで上昇＝ピッチアップ(-turnSpeed) に設定）
         setupDpad('btn-up', 0, -turnSpeed);
         setupDpad('btn-down', 0, turnSpeed);
         setupDpad('btn-left', turnSpeed, 0);
@@ -324,7 +328,6 @@
         window.addEventListener('keydown', (e) => {
             if (e.key === 'a' || e.key === 'ArrowLeft') yawRate = turnSpeed;
             if (e.key === 'd' || e.key === 'ArrowRight') yawRate = -turnSpeed;
-            // 変更: Wキー・上矢印で上昇
             if (e.key === 'w' || e.key === 'ArrowUp') pitchRate = -turnSpeed;
             if (e.key === 's' || e.key === 'ArrowDown') pitchRate = turnSpeed;
         });
@@ -346,6 +349,8 @@
             ctx.fill();
 
             objects.forEach(obj => {
+                if (!obj.active) return; // 変更: 破壊された建物はレーダーに描画しない
+                
                 const dx = obj.mesh.position.x - planeGroup.position.x;
                 const dz = obj.mesh.position.z - planeGroup.position.z;
                 
@@ -365,12 +370,10 @@
             requestAnimationFrame(animate);
 
             if (!isGameOver) {
-                // 機体の移動とピッチ・ヨー回転
                 planeGroup.rotateY(yawRate);
                 planeGroup.rotateX(pitchRate);
                 planeGroup.translateZ(currentSpeed);
 
-                // 追加: 旋回時のロール（傾き）アニメーション
                 const targetRoll = -yawRate * 15;
                 planeVisual.rotation.z += (targetRoll - planeVisual.rotation.z) * 0.1;
 
@@ -384,7 +387,8 @@
                 // 建物との衝突判定
                 planeBox.setFromObject(planeGroup);
                 for (let obj of objects) {
-                    if (planeBox.intersectsBox(obj.box3)) {
+                    // 変更: active（生存している）な建物とだけ衝突判定
+                    if (obj.active && planeBox.intersectsBox(obj.box3)) {
                         triggerGameOver();
                         break;
                     }
@@ -393,13 +397,13 @@
                 // プレイヤーの武器連射処理
                 if (isMGFiring && mgCooldown <= 0) {
                     fireMG();
-                    mgCooldown = 5; // 機銃の間隔
+                    mgCooldown = 5; 
                 }
                 if (mgCooldown > 0) mgCooldown--;
 
                 if (isRocketFiring && rocketCooldown <= 0) {
                     fireRocket();
-                    rocketCooldown = 15; // ロケット弾の間隔
+                    rocketCooldown = 15; 
                 }
                 if (rocketCooldown > 0) rocketCooldown--;
 
@@ -408,7 +412,7 @@
                     if (!enemy.active) return;
                     
                     const dist = enemy.mesh.position.distanceTo(planeGroup.position);
-                    if (dist < 800) { // 射程距離
+                    if (dist < 800) { 
                         enemy.mesh.lookAt(planeGroup.position);
                         if (enemy.cooldown <= 0) {
                             const aaBulletGeo = new THREE.SphereGeometry(1.5, 4, 4);
@@ -420,7 +424,7 @@
                             scene.add(aaBullet);
                             enemyProjectiles.push({ mesh: aaBullet, velocity: dir.multiplyScalar(8), life: 150 });
                             
-                            enemy.cooldown = 80; // 攻撃間隔
+                            enemy.cooldown = 80; 
                         }
                     }
                     if (enemy.cooldown > 0) enemy.cooldown--;
@@ -459,31 +463,40 @@
                 // 弾と建物の当たり判定
                 if (!hit) {
                     for (let obj of objects) {
-                        if (obj.box3.containsPoint(p.mesh.position)) {
+                        if (obj.active && obj.box3.containsPoint(p.mesh.position)) {
                             hit = true;
-                            obj.mesh.material.color.setHex(0xff0000);
-                            setTimeout(() => {
-                                if (obj && obj.mesh) obj.mesh.material.color.setHex(obj.isSymbol ? 0x444444 : 0xaaaaaa);
-                            }, 100);
+                            
+                            // 変更: ダメージを計算
+                            obj.hp -= p.damage;
+                            
+                            // 追加: シンボルビルなら炎上ポイントを記録
+                            if (obj.isSymbol && obj.hp > 0) {
+                                obj.fireSpots.push(p.mesh.position.clone());
+                            }
+                            
+                            // HPが0になったら消滅
+                            if (obj.hp <= 0) {
+                                obj.active = false;
+                                scene.remove(obj.mesh);
+                            } else {
+                                // 破壊されない場合は赤く点滅
+                                obj.mesh.material.color.setHex(0xff0000);
+                                setTimeout(() => {
+                                    if (obj.active && obj.mesh) obj.mesh.material.color.setHex(obj.isSymbol ? 0x444444 : 0xaaaaaa);
+                                }, 100);
+                            }
                             break;
                         }
                     }
                 }
 
-                // 弾と対空砲の当たり判定（追加部分）
+                // 弾と対空砲の当たり判定
                 if (!hit) {
                     for (let enemy of enemies) {
                         if (enemy.active && enemy.box3.containsPoint(p.mesh.position)) {
                             hit = true;
                             enemy.active = false;
-                            enemy.mesh.visible = false; // 非表示で破壊を表現
-                            
-                            // 10秒後に復活
-                            setTimeout(() => {
-                                enemy.active = true;
-                                enemy.mesh.visible = true;
-                                enemy.cooldown = 50;
-                            }, 10000);
+                            scene.remove(enemy.mesh); // 変更: 非表示ではなく完全にシーンから削除（復活なし）
                             break;
                         }
                     }
@@ -492,6 +505,39 @@
                 if (hit || p.life <= 0) {
                     scene.remove(p.mesh);
                     projectiles.splice(i, 1);
+                }
+            }
+            
+            // --- 追加: シンボルビルの炎上アニメーション処理 ---
+            objects.forEach(obj => {
+                if (obj.active && obj.isSymbol && obj.fireSpots.length > 0) {
+                    obj.fireSpots.forEach(pos => {
+                        // 確率でパーティクルを生成
+                        if (Math.random() < 0.2) { 
+                            const fireGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+                            const fireMat = new THREE.MeshBasicMaterial({ color: Math.random() > 0.5 ? 0xff4400 : 0xffaa00 });
+                            const fireMesh = new THREE.Mesh(fireGeo, fireMat);
+                            // 着弾点から少しランダムに散らす
+                            fireMesh.position.copy(pos);
+                            fireMesh.position.x += (Math.random() - 0.5) * 4;
+                            fireMesh.position.y += (Math.random() - 0.5) * 4;
+                            fireMesh.position.z += (Math.random() - 0.5) * 4;
+                            scene.add(fireMesh);
+                            activeFires.push({ mesh: fireMesh, life: 20 + Math.random() * 15 });
+                        }
+                    });
+                }
+            });
+
+            // 炎パーティクルの更新（上に登って消える）
+            for (let i = activeFires.length - 1; i >= 0; i--) {
+                const f = activeFires[i];
+                f.life--;
+                f.mesh.position.y += 0.3; // 上昇
+                f.mesh.scale.multiplyScalar(0.9); // 縮小
+                if (f.life <= 0) {
+                    scene.remove(f.mesh);
+                    activeFires.splice(i, 1);
                 }
             }
 
