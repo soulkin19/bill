@@ -16,7 +16,6 @@
         }
         #gameCanvas { display: block; }
         
-        /* UIレイヤー */
         #ui { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             pointer-events: none; 
@@ -24,7 +23,6 @@
         }
         .control-panel { pointer-events: auto; }
         
-        /* 左上: レーダー */
         #radar { 
             position: absolute; top: 20px; left: 20px; 
             border: 2px solid rgba(255,255,255,0.7); 
@@ -32,7 +30,6 @@
             backdrop-filter: blur(4px);
         }
 
-        /* 変更: 左下: 十字キー (旋回ボタン) */
         #dpad {
             position: absolute; bottom: 30px; left: 30px; 
             display: grid; grid-template-columns: 50px 50px 50px; grid-template-rows: 50px 50px 50px; gap: 5px; 
@@ -46,7 +43,6 @@
         #btn-right { grid-column: 3; grid-row: 2; }
         #btn-down { grid-column: 2; grid-row: 3; }
         
-        /* 変更: スロットルの位置を十字キーの右側に移動 */
         #throttle { 
             position: absolute; bottom: 30px; left: 200px; 
             display: flex; flex-direction: column; gap: 10px; 
@@ -57,18 +53,17 @@
         }
         #throttle button.active { background: #ffaa00; color: #fff; transform: scale(1.05); }
         
-        /* 右下: 武器 */
+        /* 武器ボタンのサイズを調整して3つ並べられるように変更 */
         #weapons { 
             position: absolute; bottom: 30px; right: 30px; 
-            display: flex; gap: 15px; 
+            display: flex; gap: 10px; 
         }
         #weapons button { 
-            width: 80px; height: 80px; border-radius: 50%; font-size: 18px; font-weight: bold; 
+            width: 70px; height: 70px; border-radius: 50%; font-size: 14px; font-weight: bold; 
             border: 3px solid rgba(255,255,255,0.5); background: rgba(255, 50, 50, 0.7); color: white; 
         }
         #weapons button:active { background: rgba(255, 0, 0, 1); transform: scale(0.95); }
 
-        /* ゲームオーバー画面 */
         #gameover { 
             display: none; position: absolute; top: 50%; left: 50%; 
             transform: translate(-50%, -50%); text-align: center;
@@ -101,6 +96,7 @@
         
         <div id="weapons" class="control-panel">
             <button id="btn-mg">機銃</button>
+            <button id="btn-rocket">ロケット</button>
             <button id="btn-bomb">爆弾</button>
         </div>
         <div id="gameover">
@@ -130,37 +126,42 @@
         let isGameOver = false;
         const objects = []; 
         const projectiles = []; 
+        const enemyProjectiles = []; 
+        const enemies = []; // 追加: 対空砲リスト
 
         const speeds = { 1: 0.5, 2: 1.5, 3: 3.5 };
         let currentSpeed = speeds[2]; 
 
+        // 追加: ロール（傾き）用に機体の表示部分を分離
         const planeGroup = new THREE.Group();
+        const planeVisual = new THREE.Group(); 
+        planeGroup.add(planeVisual);
         
         const bodyGeo = new THREE.BoxGeometry(2, 2, 8);
         const bodyMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
         const body = new THREE.Mesh(bodyGeo, bodyMat);
-        planeGroup.add(body);
+        planeVisual.add(body);
 
         const wingGeo = new THREE.BoxGeometry(12, 0.5, 2);
         const wingMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
         const wing = new THREE.Mesh(wingGeo, wingMat);
         wing.position.set(0, 0, 1);
-        planeGroup.add(wing);
+        planeVisual.add(wing);
 
         const tailGeo = new THREE.BoxGeometry(4, 0.5, 1.5);
         const tail = new THREE.Mesh(tailGeo, wingMat);
         tail.position.set(0, 0, -3.5);
-        planeGroup.add(tail);
+        planeVisual.add(tail);
         
         const finGeo = new THREE.BoxGeometry(0.5, 2, 1.5);
         const fin = new THREE.Mesh(finGeo, wingMat);
         fin.position.set(0, 1, -3.5);
-        planeGroup.add(fin);
+        planeVisual.add(fin);
 
         scene.add(planeGroup);
         planeGroup.position.set(0, 100, 200);
 
-        // --- 2. マップ（街）の生成 ---
+        // --- 2. マップ（街）と対空砲の生成 ---
         const groundGeo = new THREE.PlaneGeometry(4000, 4000);
         const groundMat = new THREE.MeshLambertMaterial({ color: 0x3b5e2b });
         const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -176,6 +177,22 @@
             
             const box3 = new THREE.Box3().setFromObject(mesh);
             objects.push({ mesh, box3, isSymbol: color === 0x444444 });
+
+            // 追加: 20%の確率で建物の上に対空砲を配置
+            if (color === 0xaaaaaa && Math.random() < 0.2) {
+                const aaGeo = new THREE.BoxGeometry(4, 4, 4);
+                const aaMat = new THREE.MeshLambertMaterial({ color: 0xff3333 });
+                const aaMesh = new THREE.Mesh(aaGeo, aaMat);
+                aaMesh.position.set(x, h + 2, z);
+                scene.add(aaMesh);
+
+                enemies.push({
+                    mesh: aaMesh,
+                    box3: new THREE.Box3().setFromObject(aaMesh),
+                    active: true,
+                    cooldown: Math.random() * 50
+                });
+            }
         }
 
         createBuilding(40, 300, 40, -40, 0, 0x444444);
@@ -192,11 +209,14 @@
             createBuilding(w, h, d, x, z, 0xaaaaaa);
         }
 
-        // --- 3. UIとコントロール（iPad対応） ---
+        // --- 3. UIとコントロール ---
         
         document.getElementById('th-3').addEventListener('touchstart', (e) => setThrottle(3, e));
         document.getElementById('th-2').addEventListener('touchstart', (e) => setThrottle(2, e));
         document.getElementById('th-1').addEventListener('touchstart', (e) => setThrottle(1, e));
+        document.getElementById('th-3').addEventListener('mousedown', (e) => setThrottle(3, e));
+        document.getElementById('th-2').addEventListener('mousedown', (e) => setThrottle(2, e));
+        document.getElementById('th-1').addEventListener('mousedown', (e) => setThrottle(1, e));
 
         function setThrottle(level, e) {
             if(e) e.preventDefault();
@@ -205,20 +225,31 @@
             document.getElementById(`th-${level}`).classList.add('active');
         }
 
-        document.getElementById('btn-mg').addEventListener('touchstart', (e) => {
-            e.preventDefault(); fireMG();
-        });
-        document.getElementById('btn-bomb').addEventListener('touchstart', (e) => {
-            e.preventDefault(); dropBomb();
-        });
+        // 追加: 連射用の変数
+        let isMGFiring = false;
+        let isRocketFiring = false;
+        let mgCooldown = 0;
+        let rocketCooldown = 0;
 
-        // マウス操作用のフォールバック (PCでのデバッグ用)
-        document.getElementById('th-3').addEventListener('mousedown', (e) => setThrottle(3, e));
-        document.getElementById('th-2').addEventListener('mousedown', (e) => setThrottle(2, e));
-        document.getElementById('th-1').addEventListener('mousedown', (e) => setThrottle(1, e));
-        document.getElementById('btn-mg').addEventListener('mousedown', (e) => { e.preventDefault(); fireMG(); });
+        // 武器の長押し設定関数
+        const setupWeaponBtn = (id, stateVarSetter) => {
+            const btn = document.getElementById(id);
+            const start = (e) => { e.preventDefault(); stateVarSetter(true); };
+            const end = (e) => { e.preventDefault(); stateVarSetter(false); };
+            
+            btn.addEventListener('touchstart', start);
+            btn.addEventListener('touchend', end);
+            btn.addEventListener('mousedown', start);
+            btn.addEventListener('mouseup', end);
+            btn.addEventListener('mouseleave', end);
+        };
+
+        setupWeaponBtn('btn-mg', (v) => isMGFiring = v);
+        setupWeaponBtn('btn-rocket', (v) => isRocketFiring = v);
+
+        // 爆弾は単発のまま
+        document.getElementById('btn-bomb').addEventListener('touchstart', (e) => { e.preventDefault(); dropBomb(); });
         document.getElementById('btn-bomb').addEventListener('mousedown', (e) => { e.preventDefault(); dropBomb(); });
-
 
         function fireMG() {
             if (isGameOver) return;
@@ -232,6 +263,22 @@
             
             projectiles.push({ mesh: bullet, velocity: direction.multiplyScalar(15), type: 'mg', life: 100 });
             scene.add(bullet);
+        }
+
+        function fireRocket() {
+            if (isGameOver) return;
+            const rGeo = new THREE.CylinderGeometry(0.5, 0.5, 3, 8);
+            const rMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const rocket = new THREE.Mesh(rGeo, rMat);
+            rocket.position.copy(planeGroup.position);
+            rocket.quaternion.copy(planeGroup.quaternion);
+            rocket.rotateX(Math.PI / 2); // 進行方向に向ける
+            
+            const direction = new THREE.Vector3(0, 0, 1);
+            direction.applyQuaternion(planeGroup.quaternion);
+            
+            projectiles.push({ mesh: rocket, velocity: direction.multiplyScalar(12), type: 'rocket', life: 150 });
+            scene.add(rocket);
         }
 
         function dropBomb() {
@@ -251,10 +298,10 @@
             scene.add(bomb);
         }
 
-        // --- 変更: 十字キーでの旋回コントロール ---
+        // --- 十字キーでの旋回コントロール ---
         let pitchRate = 0;
         let yawRate = 0;
-        const turnSpeed = 0.03; // 感度をマイルドに設定
+        const turnSpeed = 0.03; 
 
         const setupDpad = (id, yRate, pRate) => {
             const btn = document.getElementById(id);
@@ -268,17 +315,18 @@
             btn.addEventListener('mouseleave', end);
         };
 
-        setupDpad('btn-up', 0, turnSpeed);
-        setupDpad('btn-down', 0, -turnSpeed);
+        // 変更: 上下ボタンの動きを逆に（上ボタンで上昇＝ピッチアップ(-turnSpeed) に設定）
+        setupDpad('btn-up', 0, -turnSpeed);
+        setupDpad('btn-down', 0, turnSpeed);
         setupDpad('btn-left', turnSpeed, 0);
         setupDpad('btn-right', -turnSpeed, 0);
 
-        // 外部キーボード（WASD / 矢印キー）操作
         window.addEventListener('keydown', (e) => {
             if (e.key === 'a' || e.key === 'ArrowLeft') yawRate = turnSpeed;
             if (e.key === 'd' || e.key === 'ArrowRight') yawRate = -turnSpeed;
-            if (e.key === 'w' || e.key === 'ArrowUp') pitchRate = turnSpeed;
-            if (e.key === 's' || e.key === 'ArrowDown') pitchRate = -turnSpeed;
+            // 変更: Wキー・上矢印で上昇
+            if (e.key === 'w' || e.key === 'ArrowUp') pitchRate = -turnSpeed;
+            if (e.key === 's' || e.key === 'ArrowDown') pitchRate = turnSpeed;
         });
         window.addEventListener('keyup', (e) => {
             if (['a', 'd', 'ArrowLeft', 'ArrowRight'].includes(e.key)) yawRate = 0;
@@ -292,7 +340,6 @@
 
         function updateRadar() {
             ctx.clearRect(0, 0, 160, 160);
-            
             ctx.fillStyle = '#00ff00';
             ctx.beginPath();
             ctx.arc(80, 80, 4, 0, Math.PI * 2);
@@ -305,7 +352,6 @@
                 if (Math.abs(dx) < radarRange && Math.abs(dz) < radarRange) {
                     const radarX = 80 + (dx / radarRange) * 80;
                     const radarY = 80 + (dz / radarRange) * 80;
-                    
                     ctx.fillStyle = obj.isSymbol ? '#ff0000' : '#ffffff';
                     const size = obj.isSymbol ? 4 : 2;
                     ctx.fillRect(radarX - size/2, radarY - size/2, size, size);
@@ -319,20 +365,23 @@
             requestAnimationFrame(animate);
 
             if (!isGameOver) {
+                // 機体の移動とピッチ・ヨー回転
                 planeGroup.rotateY(yawRate);
                 planeGroup.rotateX(pitchRate);
-                
                 planeGroup.translateZ(currentSpeed);
+
+                // 追加: 旋回時のロール（傾き）アニメーション
+                const targetRoll = -yawRate * 15;
+                planeVisual.rotation.z += (targetRoll - planeVisual.rotation.z) * 0.1;
 
                 const relativeCameraOffset = new THREE.Vector3(0, 20, -50);
                 const cameraOffset = relativeCameraOffset.applyMatrix4(planeGroup.matrixWorld);
                 camera.position.lerp(cameraOffset, 0.1);
                 camera.lookAt(planeGroup.position);
 
-                if (planeGroup.position.y < 2) {
-                    triggerGameOver();
-                }
+                if (planeGroup.position.y < 2) triggerGameOver();
 
+                // 建物との衝突判定
                 planeBox.setFromObject(planeGroup);
                 for (let obj of objects) {
                     if (planeBox.intersectsBox(obj.box3)) {
@@ -340,21 +389,74 @@
                         break;
                     }
                 }
+
+                // プレイヤーの武器連射処理
+                if (isMGFiring && mgCooldown <= 0) {
+                    fireMG();
+                    mgCooldown = 5; // 機銃の間隔
+                }
+                if (mgCooldown > 0) mgCooldown--;
+
+                if (isRocketFiring && rocketCooldown <= 0) {
+                    fireRocket();
+                    rocketCooldown = 15; // ロケット弾の間隔
+                }
+                if (rocketCooldown > 0) rocketCooldown--;
+
+                // 対空砲（敵）の攻撃処理
+                enemies.forEach(enemy => {
+                    if (!enemy.active) return;
+                    
+                    const dist = enemy.mesh.position.distanceTo(planeGroup.position);
+                    if (dist < 800) { // 射程距離
+                        enemy.mesh.lookAt(planeGroup.position);
+                        if (enemy.cooldown <= 0) {
+                            const aaBulletGeo = new THREE.SphereGeometry(1.5, 4, 4);
+                            const aaBulletMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+                            const aaBullet = new THREE.Mesh(aaBulletGeo, aaBulletMat);
+                            aaBullet.position.copy(enemy.mesh.position);
+                            
+                            const dir = new THREE.Vector3().subVectors(planeGroup.position, enemy.mesh.position).normalize();
+                            scene.add(aaBullet);
+                            enemyProjectiles.push({ mesh: aaBullet, velocity: dir.multiplyScalar(8), life: 150 });
+                            
+                            enemy.cooldown = 80; // 攻撃間隔
+                        }
+                    }
+                    if (enemy.cooldown > 0) enemy.cooldown--;
+                });
             }
 
+            // 敵の弾の処理
+            for (let i = enemyProjectiles.length - 1; i >= 0; i--) {
+                const p = enemyProjectiles[i];
+                p.mesh.position.add(p.velocity);
+                p.life--;
+                
+                let hit = false;
+                if (!isGameOver && planeBox.containsPoint(p.mesh.position)) {
+                    hit = true;
+                    triggerGameOver();
+                }
+
+                if (hit || p.life <= 0) {
+                    scene.remove(p.mesh);
+                    enemyProjectiles.splice(i, 1);
+                }
+            }
+
+            // プレイヤーの弾の処理
             for (let i = projectiles.length - 1; i >= 0; i--) {
                 const p = projectiles[i];
                 p.mesh.position.add(p.velocity);
                 
-                if (p.type === 'bomb') {
-                    p.velocity.y -= 0.05; 
-                }
-
+                if (p.type === 'bomb') p.velocity.y -= 0.05; 
                 p.life--;
-                let hit = false;
                 
+                let hit = false;
                 if (p.mesh.position.y <= 0) hit = true;
 
+                // 弾と建物の当たり判定
                 if (!hit) {
                     for (let obj of objects) {
                         if (obj.box3.containsPoint(p.mesh.position)) {
@@ -363,6 +465,25 @@
                             setTimeout(() => {
                                 if (obj && obj.mesh) obj.mesh.material.color.setHex(obj.isSymbol ? 0x444444 : 0xaaaaaa);
                             }, 100);
+                            break;
+                        }
+                    }
+                }
+
+                // 弾と対空砲の当たり判定（追加部分）
+                if (!hit) {
+                    for (let enemy of enemies) {
+                        if (enemy.active && enemy.box3.containsPoint(p.mesh.position)) {
+                            hit = true;
+                            enemy.active = false;
+                            enemy.mesh.visible = false; // 非表示で破壊を表現
+                            
+                            // 10秒後に復活
+                            setTimeout(() => {
+                                enemy.active = true;
+                                enemy.mesh.visible = true;
+                                enemy.cooldown = 50;
+                            }, 10000);
                             break;
                         }
                     }
