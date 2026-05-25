@@ -20,7 +20,7 @@
         #ui { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
             pointer-events: none; 
-            z-index: 2; /* 修正: UIを最前面に */
+            z-index: 2; 
         }
         .control-panel { pointer-events: auto; }
         
@@ -31,10 +31,24 @@
             border-radius: 50%; background: rgba(0, 50, 0, 0.4); 
             backdrop-filter: blur(4px);
         }
-        
-        /* 左下: スロットル (3段階) */
-        #throttle { 
+
+        /* 変更: 左下: 十字キー (旋回ボタン) */
+        #dpad {
             position: absolute; bottom: 30px; left: 30px; 
+            display: grid; grid-template-columns: 50px 50px 50px; grid-template-rows: 50px 50px 50px; gap: 5px; 
+        }
+        #dpad button {
+            background: rgba(255, 255, 255, 0.5); border: none; border-radius: 8px; font-weight: bold; font-size: 20px;
+        }
+        #dpad button:active { background: #ffaa00; color: #fff; }
+        #btn-up { grid-column: 2; grid-row: 1; }
+        #btn-left { grid-column: 1; grid-row: 2; }
+        #btn-right { grid-column: 3; grid-row: 2; }
+        #btn-down { grid-column: 2; grid-row: 3; }
+        
+        /* 変更: スロットルの位置を十字キーの右側に移動 */
+        #throttle { 
+            position: absolute; bottom: 30px; left: 200px; 
             display: flex; flex-direction: column; gap: 10px; 
         }
         #throttle button { 
@@ -66,24 +80,25 @@
             margin-top: 20px; padding: 10px 30px; font-size: 24px;
             background: #fff; color: #000; border: none; border-radius: 8px; cursor: pointer;
         }
-        
-        /* タッチ操縦用ゾーン（画面全体） */
-        #joystick-zone { 
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-            z-index: 1; /* 修正: -1から1に変更し、3Dキャンバスの前面に配置 */
-            pointer-events: auto; 
-        }
     </style>
 </head>
 <body>
-    <div id="joystick-zone"></div>
     <div id="ui">
         <canvas id="radar" width="160" height="160" class="control-panel"></canvas>
+        
+        <div id="dpad" class="control-panel">
+            <button id="btn-up">▲</button>
+            <button id="btn-left">◀</button>
+            <button id="btn-right">▶</button>
+            <button id="btn-down">▼</button>
+        </div>
+
         <div id="throttle" class="control-panel">
             <button id="th-3">高速</button>
             <button id="th-2" class="active">中速</button>
             <button id="th-1">低速</button>
         </div>
+        
         <div id="weapons" class="control-panel">
             <button id="btn-mg">機銃</button>
             <button id="btn-bomb">爆弾</button>
@@ -197,6 +212,14 @@
             e.preventDefault(); dropBomb();
         });
 
+        // マウス操作用のフォールバック (PCでのデバッグ用)
+        document.getElementById('th-3').addEventListener('mousedown', (e) => setThrottle(3, e));
+        document.getElementById('th-2').addEventListener('mousedown', (e) => setThrottle(2, e));
+        document.getElementById('th-1').addEventListener('mousedown', (e) => setThrottle(1, e));
+        document.getElementById('btn-mg').addEventListener('mousedown', (e) => { e.preventDefault(); fireMG(); });
+        document.getElementById('btn-bomb').addEventListener('mousedown', (e) => { e.preventDefault(); dropBomb(); });
+
+
         function fireMG() {
             if (isGameOver) return;
             const bulletGeo = new THREE.SphereGeometry(0.5, 8, 8);
@@ -228,59 +251,34 @@
             scene.add(bomb);
         }
 
-        // --- 操縦入力の修正部分 ---
-        let touchStartPos = null;
+        // --- 変更: 十字キーでの旋回コントロール ---
         let pitchRate = 0;
         let yawRate = 0;
+        const turnSpeed = 0.03; // 感度をマイルドに設定
 
-        const joystickZone = document.getElementById('joystick-zone');
-        
-        joystickZone.addEventListener('touchstart', (e) => {
-            e.preventDefault();
-            touchStartPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        }, { passive: false });
-
-        joystickZone.addEventListener('touchmove', (e) => {
-            e.preventDefault();
-            if (!touchStartPos) return;
-            const dx = e.touches[0].clientX - touchStartPos.x;
-            const dy = e.touches[0].clientY - touchStartPos.y;
+        const setupDpad = (id, yRate, pRate) => {
+            const btn = document.getElementById(id);
+            const start = (e) => { e.preventDefault(); yawRate = yRate; pitchRate = pRate; };
+            const end = (e) => { e.preventDefault(); yawRate = 0; pitchRate = 0; };
             
-            // 修正: 旋回感度を大幅に上げました（0.05 -> 0.8）
-            yawRate = -(dx / window.innerWidth) * 0.8;
-            pitchRate = -(dy / window.innerHeight) * 0.8;
-        }, { passive: false });
+            btn.addEventListener('touchstart', start);
+            btn.addEventListener('touchend', end);
+            btn.addEventListener('mousedown', start);
+            btn.addEventListener('mouseup', end);
+            btn.addEventListener('mouseleave', end);
+        };
 
-        joystickZone.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            touchStartPos = null;
-            pitchRate = 0;
-            yawRate = 0;
-        });
+        setupDpad('btn-up', 0, turnSpeed);
+        setupDpad('btn-down', 0, -turnSpeed);
+        setupDpad('btn-left', turnSpeed, 0);
+        setupDpad('btn-right', -turnSpeed, 0);
 
-        // PC・マウス操作用
-        let isMouseDown = false;
-        joystickZone.addEventListener('mousedown', (e) => {
-            isMouseDown = true; touchStartPos = { x: e.clientX, y: e.clientY };
-        });
-        window.addEventListener('mousemove', (e) => {
-            if (!isMouseDown) return;
-            const dx = e.clientX - touchStartPos.x;
-            const dy = e.clientY - touchStartPos.y;
-            // 修正: 旋回感度
-            yawRate = -(dx / window.innerWidth) * 0.8;
-            pitchRate = -(dy / window.innerHeight) * 0.8;
-        });
-        window.addEventListener('mouseup', () => {
-            isMouseDown = false; pitchRate = 0; yawRate = 0;
-        });
-
-        // 追加: 外部キーボード（WASD / 矢印キー）操作
+        // 外部キーボード（WASD / 矢印キー）操作
         window.addEventListener('keydown', (e) => {
-            if (e.key === 'a' || e.key === 'ArrowLeft') yawRate = 0.04;
-            if (e.key === 'd' || e.key === 'ArrowRight') yawRate = -0.04;
-            if (e.key === 'w' || e.key === 'ArrowUp') pitchRate = 0.04;
-            if (e.key === 's' || e.key === 'ArrowDown') pitchRate = -0.04;
+            if (e.key === 'a' || e.key === 'ArrowLeft') yawRate = turnSpeed;
+            if (e.key === 'd' || e.key === 'ArrowRight') yawRate = -turnSpeed;
+            if (e.key === 'w' || e.key === 'ArrowUp') pitchRate = turnSpeed;
+            if (e.key === 's' || e.key === 'ArrowDown') pitchRate = -turnSpeed;
         });
         window.addEventListener('keyup', (e) => {
             if (['a', 'd', 'ArrowLeft', 'ArrowRight'].includes(e.key)) yawRate = 0;
